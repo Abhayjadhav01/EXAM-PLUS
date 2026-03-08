@@ -1,0 +1,5 @@
+{
+  "name": "PYQ ANALYZER",
+  "description": "Analyze previous year question papers to identify repeated questions, marks distribution, and related topics using AI.",
+  "requestFramePermissions": []
+}
