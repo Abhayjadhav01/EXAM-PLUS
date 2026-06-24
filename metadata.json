@@ -1,5 +1,6 @@
 {
-  "name": "PYQ ANALYZER",
-  "description": "Analyze previous year question papers to identify repeated questions, marks distribution, and related topics using AI.",
-  "requestFramePermissions": []
+  "name": "Exam Plus",
+  "description": "Exam Plus helps you analyze previous year question papers to identify repeated questions, marks distribution, and related topics using advanced analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

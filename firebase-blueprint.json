@@ -1,0 +1,44 @@
+{
+  "entities": {
+    "AnalysisResult": {
+      "title": "Analysis Result",
+      "description": "Stored analysis of previous year question papers",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Owner's user ID" },
+        "subject": { "type": "string" },
+        "institution": { "type": "string" },
+        "academicContext": { "type": "string" },
+        "metadataConfidence": { "type": "number" },
+        "inferredSyllabus": { "type": "string" },
+        "questions": { "type": "array" },
+        "rawQuestions": { "type": "array" },
+        "summary": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "subject", "questions", "createdAt"]
+    },
+    "UserLog": {
+      "title": "User Log",
+      "description": "Activity logs for users",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "action", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/analyses/{analysisId}": {
+      "schema": "AnalysisResult",
+      "description": "Collection of analyzed paper results"
+    },
+    "/logs/{logId}": {
+      "schema": "UserLog",
+      "description": "Collection of user activity logs"
+    }
+  }
+}
