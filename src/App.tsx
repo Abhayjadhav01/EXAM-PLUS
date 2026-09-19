@@ -1684,22 +1684,19 @@ export default function App() {
 
   if (!isAuthReady) {
     return (
-      <div className="min-h-screen bg-[#F5F5F0] flex items-center justify-center">
+      <div className="min-h-screen bg-[#0B0F17] flex items-center justify-center">
         <div className="flex flex-col items-center gap-6">
-          <div className="w-24 h-24 bg-white rounded-[40px] flex items-center justify-center shadow-2xl shadow-emerald-200/50 border border-black/5 p-4">
+          <div className="w-24 h-24 bg-black rounded-3xl flex items-center justify-center shadow-2xl shadow-sky-950/60 border border-sky-500/30 p-2 overflow-hidden">
             <img 
               src="/logo.png" 
               alt="Exam Plus Logo" 
               className="w-full h-full object-contain"
               referrerPolicy="no-referrer"
-              onError={(e) => {
-                e.currentTarget.src = 'https://api.dicebear.com/7.x/initials/svg?seed=EP&backgroundColor=059669';
-              }}
             />
           </div>
           <div className="flex flex-col items-center gap-2">
-            <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
-            <p className="text-black/40 font-black uppercase tracking-widest text-[10px] animate-pulse">Initializing Exam Plus...</p>
+            <Loader2 className="w-8 h-8 text-sky-400 animate-spin" />
+            <p className="text-slate-400 font-black uppercase tracking-widest text-[10px] animate-pulse">Initializing Exam Plus...</p>
           </div>
         </div>
       </div>
@@ -1718,15 +1715,12 @@ export default function App() {
       <header className="border-b border-slate-800/10 bg-gradient-to-r from-[#0F172A] to-[#1E293B] sticky top-0 z-50 shadow-sm text-white font-sans">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center shadow-md border border-white/10 p-1.5 overflow-hidden">
+            <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center shadow-md border border-sky-500/30 p-1 overflow-hidden ring-1 ring-white/5">
               <img 
                 src="/logo.png" 
                 alt="Exam Plus" 
                 className="w-full h-full object-contain"
                 referrerPolicy="no-referrer"
-                onError={(e) => {
-                  e.currentTarget.src = 'https://api.dicebear.com/7.x/initials/svg?seed=EP&backgroundColor=10B981';
-                }}
               />
             </div>
             <div className="flex flex-col">
@@ -2391,15 +2385,12 @@ export default function App() {
                   <div className="flex items-center justify-between mb-8 shrink-0">
                     <div className="flex items-center gap-4">
                       <div className="relative">
-                        <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center border border-black/5 shadow-sm p-2">
+                        <div className="w-12 h-12 bg-black rounded-2xl flex items-center justify-center border border-sky-500/20 shadow-sm p-1 overflow-hidden ring-1 ring-white/5">
                           <img 
                             src="/logo.png" 
                             alt="Exam Plus Assistant" 
                             className="w-full h-full object-contain"
                             referrerPolicy="no-referrer"
-                            onError={(e) => {
-                              e.currentTarget.src = 'https://api.dicebear.com/7.x/initials/svg?seed=EP&backgroundColor=059669';
-                            }}
                           />
                         </div>
                         <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full border-2 border-white" />
@@ -2899,9 +2890,14 @@ export default function App() {
         <div className="max-w-6xl mx-auto px-6 py-16">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-10 mb-12">
             <div className="md:col-span-2 space-y-4 p-0">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-emerald-500/10 rounded-lg flex items-center justify-center border border-emerald-500/20">
-                  <GraduationCap size={16} className="text-[#10B981]" />
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center border border-sky-500/30 p-0.5 overflow-hidden ring-1 ring-white/10 shadow-inner">
+                  <img 
+                    src="/logo.png" 
+                    alt="Exam Plus" 
+                    className="w-full h-full object-contain"
+                    referrerPolicy="no-referrer"
+                  />
                 </div>
                 <span className="text-sm font-black tracking-tight text-white uppercase font-heading">Exam Plus</span>
               </div>
