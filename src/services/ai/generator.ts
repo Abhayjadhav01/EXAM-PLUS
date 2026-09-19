@@ -1,10 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+import { generateContentWithRetry } from "./client";
 
 export async function simplifyAnswer(question: string, answer: string, marks: number): Promise<string> {
-  const model = ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+  const response = await generateContentWithRetry({
+    preferredModel: "gemini-3.8-flash",
     contents: [
       {
         role: "user",
@@ -89,13 +87,12 @@ STRICT GUIDELINES:
     ]
   });
 
-  const response = await model;
   return response.text || "Failed to simplify answer.";
 }
 
 export async function generateShortAnswer(question: string, answer: string): Promise<string> {
-  const model = ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+  const response = await generateContentWithRetry({
+    preferredModel: "gemini-3.8-flash",
     contents: [
       {
         role: "user",
@@ -175,6 +172,5 @@ STRICT GUIDELINES:
     ]
   });
 
-  const response = await model;
   return response.text || "Failed to generate short answer.";
 }

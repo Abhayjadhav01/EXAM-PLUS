@@ -1,14 +1,15 @@
-import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
+import { Type, ThinkingLevel } from "@google/genai";
 import { AnalysisResult, Question, RawQuestion } from "../../types";
-
+import { generateContentWithRetry, safeJsonParse } from "./client";
+import { answerCache, runWithControlledConcurrency } from "./cache";
+import { normalizeQuestionText, areQuestionsSimilar } from "./normalizer";
 
 export async function analyzePapers(
   files: { data: string; mimeType: string; name: string }[],
   contextHint?: string
 ): Promise<AnalysisResult> {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-  const model = ai.models.generateContent({
-    model: "gemini-3.5-flash", 
+  const response = await generateContentWithRetry({
+    preferredModel: "gemini-3.8-flash",
     contents: [
       {
         role: "user",
@@ -22,35 +23,7 @@ export async function analyzePapers(
                ${files.map((f, i) => `- Paper ${i + 1}: "${f.name}"`).join('\n')}
             2. For every question in both 'questions' and 'rawQuestions', you MUST assign 'paperName' and 'sourcePapers' using the EXACT paper filenames provided in the list above (e.g. ${files.map(f => `"${f.name}"`).join(', ')}). Under no circumstances should you lump all questions under just one paper. Ensure "isSameSubject" is true if all papers correspond to the same subject domain.
             3. Do NOT skip any question. Do NOT merge too aggressively. Keep every single unique, meaningful question in the Master Collection ('questions'). Only merge questions that are clear semantic duplicates (questions with the same meaning and answers but slightly different wording).
-            4. Keep original numbering in the questionReference where possible. Keep MCQ options (A, B, C, D) inside the text property.
-
-            🧠 Master Collection & Semantic Clustering:
-            - The main 'questions' array represents the complete QUESTION BANK containing ALL unique questions (both repeated and non-repeated).
-            - Identify semantic duplicates (e.g., 'Explain flag register of PIC18' and 'Explain PSW of PIC18' or 'Describe memory hierarchy' and 'Explain RAM/ROM structure of PIC'). These share the same core concepts and must be merged into a single master question in 'questions'.
-            - When merging semantic duplicates:
-              - Set the 'text' to the most detailed/complete wording variation.
-              - Standardize and list all other wording variations inside 'rephrasings'.
-              - Set 'repetitionCount' to the exact number of times this question occurred across all papers.
-              - Set 'sourcePapers' to contain the exact names of all paper files where this question or its rephrased versions appeared.
-            - If questions have different focuses or different concepts (e.g. 'Explain PSW' vs 'Explain Timer 0'), they are separate questions. They MUST be distinct entries in 'questions' with repetitionCount: 1 (unless they repeat elsewhere).
-            - Always provide a 'probabilityScore' (0-100, e.g., 94) and 'importance' ("HIGH", "MEDIUM", "LOW") for each question based on frequency, marks weight, and topic significance.
-            
-            📂 INTELLIGENT UNIT CLASSIFICATION & TOPIC MAPPING:
-            - Assign each question to a logically progressional unit ('Unit 1', 'Unit 2', 'Unit 3', 'Unit 4') and group under an intuitive 'topic' (e.g. "UART Communication", "PWM Generation", "LCD Interfacing").
-            - If the subject is PIC Microcontrollers, Microcontrollers, or PIC-related, use the following strict mapping:
-              - **Unit 1**: PIC Architecture, PIC18, RAM, ROM, Memory Organization, ALU, PSW, Reset Modes, CPU registers (WREG, BSR, etc.), Instruction Set, etc.
-              - **Unit 2**: Timers, Counters, PWM, CCP (Capture/Compare/PWM), ADC (Analog-to-Digital Converter), interrupts, capture mode, compare mode, compare match.
-              - **Unit 3**: Peripheral Interfacing: LCD, GPIO, LEDs, Keypad, 7-Segment display, Home Protection System, relay interfacing, DAC interfacing, motor interfacing, various sensors, etc.
-              - **Unit 4**: Serial & Storage: UART, SPI, I2C, RS232, RS485, EEPROM, RTC (Real-Time Clock), baud rate calculation, serial transmission.
-            - For any other subject, perform a logical, balanced division of topics into exactly 4 sequential academic units (Unit 1, Unit 2, Unit 3, Unit 4).
-
-            📊 EXAM PREDICTIONS:
-            - Formulate exam-focused predictions:
-              1. Top 10 Most Expected/Repeated Questions (literal text).
-              2. Most Important Topics (highest cumulative frequencies).
-              3. Most Likely Questions for the Next Exam (trend and cycle based predictions).
-
-            Return the result strictly in JSON format.`
+            4. Keep original numbering in the questionReference where possible. Keep MCQ options (A, B, C, D) inside the text property. Strip out irrelevant header/footer text like page numbers or 'Max Marks 100'.`
           },
           ...files.map(f => ({
             inlineData: {
@@ -131,35 +104,116 @@ export async function analyzePapers(
     }
   });
 
-  const response = await model;
   const text = response.text;
-  if (!text) throw new Error("No response from server");
+  if (!text) throw new Error("No response from AI model.");
+  const result = safeJsonParse<AnalysisResult>(text, "The server returned an invalid data format. Try again.");
 
-  try {
-    return JSON.parse(text) as AnalysisResult;
-  } catch (e) {
-    console.error("JSON parse failed", e, text);
-    const cleaned = text
-      .replace(/\\n/g, "\\n")
-      .replace(/\\"/g, "\\\"")
-      .replace(/[\u0000-\u001F]+/g, " ");
-    
-    try {
-      return JSON.parse(cleaned) as AnalysisResult;
-    } catch (e2) {
-      throw new Error("The server returned an invalid data format. Try again.");
+  // Post-processing: Normalize questions, cross-link similar questions, and connect pre-cached answers
+  if (result && Array.isArray(result.questions)) {
+    const qLen = result.questions.length;
+    for (let i = 0; i < qLen; i++) {
+      const q1 = result.questions[i];
+      if (!q1.linkedQuestionIds) q1.linkedQuestionIds = [];
+
+      // Check answer cache for instant pre-population
+      const cached = answerCache.get(result.subject, q1.text, "detailed");
+      if (cached) {
+        q1.answer = cached.answer;
+        q1.shortAnswer = cached.shortAnswer;
+        q1.answerSections = cached.answerSections;
+        q1.marksDistribution = cached.marksDistribution;
+      }
+
+      // Check similarity with other questions to link semantic duplicates
+      for (let j = i + 1; j < qLen; j++) {
+        const q2 = result.questions[j];
+        if (areQuestionsSimilar(q1.text, q2.text)) {
+          if (!q1.linkedQuestionIds.includes(q2.id)) q1.linkedQuestionIds.push(q2.id);
+          if (!q2.linkedQuestionIds) q2.linkedQuestionIds = [];
+          if (!q2.linkedQuestionIds.includes(q1.id)) q2.linkedQuestionIds.push(q1.id);
+        }
+      }
     }
   }
+
+  return result;
+}
+
+export interface AnswerGenerationOptions {
+  unit?: string;
+  topic?: string;
+  mode?: 'short' | 'medium' | 'detailed';
+}
+
+export interface AnswerGenerationResult {
+  answer: string;
+  shortAnswer: string;
+  answerSections: any[];
+  marksDistribution: any[];
+  isFromCache?: boolean;
 }
 
 export async function generateFullAnswer(
   questionText: string,
   marks: number,
-  subject: string
-): Promise<{ answer: string; shortAnswer: string; answerSections: any[]; marksDistribution: any[] }> {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-  const model = ai.models.generateContent({
-    model: "gemini-3.5-flash",
+  subject: string,
+  options?: AnswerGenerationOptions
+): Promise<AnswerGenerationResult> {
+  const targetMode = options?.mode || (marks <= 4 ? "short" : marks <= 8 ? "medium" : "detailed");
+
+  // 1. FAST CACHE LOOKUP: If already generated for this question/mode, return immediately
+  const cached = answerCache.get(subject, questionText, targetMode);
+  if (cached) {
+    return {
+      answer: cached.answer,
+      shortAnswer: cached.shortAnswer,
+      answerSections: cached.answerSections,
+      marksDistribution: cached.marksDistribution,
+      isFromCache: true
+    };
+  }
+
+  // 2. CONTEXT OPTIMIZATION & TAILORED PROMPTING BASED ON ANSWER LENGTH MODE
+  let modeGuidance = "";
+  if (targetMode === "short") {
+    modeGuidance = `TARGET MODE: SHORT EXAM REVISION (2-5 Marks)
+Keep it crisp, rapid to read, and high-impact (~150-250 words total).
+Include:
+1. QUESTION TYPE DETECTION
+2. 📘 Definition (2-3 precise bullet points)
+3. 📖 Key Points (3 core exam points)
+4. 💡 Example (1 short illustrative example)
+5. 📖 Conclusion (1-2 sentence summary)
+Keep all bullets under 2 lines. Do not generate massive diagrams or long comparisons.`;
+  } else if (targetMode === "medium") {
+    modeGuidance = `TARGET MODE: STANDARD EXAM ANSWER (5-8 Marks)
+Keep it well-balanced and structured (~350-500 words total).
+Include:
+1. QUESTION TYPE DETECTION
+2. 📘 Definition
+3. 📖 Key Concepts (2 core sub-points with meaning and why important)
+4. 💡 Concrete Example
+5. ⚖ Advantages & Disadvantages (2-3 points each)
+6. 📌 Applications (2 bullet points)
+7. 📖 Conclusion (2 wrap-up bullets)`;
+  } else {
+    modeGuidance = `TARGET MODE: COMPREHENSIVE TOPPER NOTES (10-15+ Marks)
+Generate exhaustive, highly comprehensive solutions with full structural sections (~750-1200 words).
+Include:
+1. QUESTION TYPE DETECTION
+2. Contents Index (if >=5 marks)
+3. 📘 Definition
+4. 📖 Key Concepts
+5. 🖼 Diagram (clean ASCII only, with Component Explanation and Working Explanation)
+6. 💡 Real-world Scenario / Example
+7. 📊 Comparison Table / Matrix
+8. ⚖ Numbered Advantages & Disadvantages (3-4 each)
+9. 📌 Industry Applications
+10. 📖 Conclusion`;
+  }
+
+  const response = await generateContentWithRetry({
+    preferredModel: "gemini-3.8-flash",
     contents: [
       {
         role: "user",
@@ -353,16 +407,14 @@ Align content format with the detected question type:
       • [Summary of future directions or overall significance. Max 2 lines]
 
 ==================================================
-7. ANSWER LENGTH CONTROL
+4. CONTEXT & ANSWER LENGTH
 ==================================================
-Generate exhaustive, highly comprehensive text solutions (never let them be shallow, use MULTIPLE of the structures above to make answers massive, but keep every single bullet/paragraph under 2 lines):
-- 2 Marks: Very Short (Definition + 2 Key Points).
-- 5 Marks: Moderate (Definition, compact ASCII diagram, Detailed Explanation of 2 main concepts, Advantages, Disadvantages, and formal Conclusion).
-- 8 Marks: Detailed (Contents index, Definition, Key Concepts, ASCII diagram/flowchart, Detailed Explanation of 3 concepts, Example, 3 Advantages & Disadvantages, Applications, and formal Conclusion).
-- 10 Marks: Comprehensive (Contents index, Definition, Key Concepts, ASCII diagram with step explanation, Detailed Explanation of 4-5 concepts, Example, 4 Advantages & Disadvantages, Applications for at least 3 industries, and formal Conclusion).
+${modeGuidance}
 
 ==================================================
 SUBJECT: ${subject}
+${options?.unit ? `UNIT: ${options.unit}` : ""}
+${options?.topic ? `TOPIC: ${options.topic}` : ""}
 QUESTION: ${questionText}
 MARKS: ${marks}
 
@@ -372,9 +424,9 @@ Return a JSON object with:
 "QUESTION TYPE DETECTION: [Detected Category Name]
 
 ---
-[Your complete formatted answer fitting all rules, containing the Contents index if >=5 marks, visual sections, avoiding markdown header markers or bold asterisks]"
+[Your complete formatted answer fitting all rules, containing the Contents index if detailed/medium, visual sections, avoiding markdown header markers or bold asterisks]"
 2. "shortAnswer": A crisp 2-sentence summary of the core concept.
-3. "answerSections": An array of objects [{"title": "📘 Definition", "content": "...", "type": "text"}, {"title": "🖼 Diagram", "content": "...", "type": "diagram"}, {"title": "📊 Comparison Table", "content": "| Parameter | Item A | Item B |", "type": "table"}, ...] representing the modular structured visual sections. Please ensure you name titles exactly with their selected visual emoji prefix, and configure content format/type strictly. Do not include Memory Trick or Quick Revision sections.
+3. "answerSections": An array of objects [{"title": "📘 Definition", "content": "...", "type": "text"}, {"title": "🖼 Diagram", "content": "...", "type": "diagram"}, {"title": "📊 Comparison Table", "content": "| Parameter | Item A | Item B |", "type": "table"}, ...] representing the modular structured visual sections.
 4. "marksDistribution": An array of objects [{"point": "Intro & precise definition", "marks": 2}, ...] showing how to score the full ${marks} marks.
 
 Return the result strictly in JSON format.`
@@ -417,8 +469,142 @@ Return the result strictly in JSON format.`
     }
   });
 
-  const response = await model;
-  return JSON.parse(response.text) as any;
+  const text = response.text;
+  if (!text) throw new Error("No response from AI model.");
+  const parsed = safeJsonParse<{ answer: string; shortAnswer: string; answerSections: any[]; marksDistribution: any[] }>(
+    text,
+    "Failed to parse model answer."
+  );
+
+  // Store in cache for instant re-use
+  answerCache.set(subject, questionText, parsed, targetMode);
+
+  return {
+    ...parsed,
+    isFromCache: false
+  };
+}
+
+/**
+ * Batch generate answers with duplicate detection, cache check, and controlled concurrency limit
+ */
+export async function batchGenerateAnswers(
+  questions: { id: string; text: string; marks: number; unit?: string; topic?: string }[],
+  subject: string,
+  mode: 'short' | 'medium' | 'detailed' = 'detailed',
+  concurrencyLimit: number = 3,
+  onProgress?: (completed: number, total: number, result?: any) => void
+): Promise<{
+  answers: Record<string, AnswerGenerationResult>;
+  stats: {
+    total: number;
+    cachedCount: number;
+    generatedCount: number;
+    duplicatesMerged: number;
+    failedCount: number;
+    durationMs: number;
+  };
+  failedQuestions: { id: string; text: string; error: string }[];
+}> {
+  const startTime = Date.now();
+  const total = questions.length;
+  const answers: Record<string, AnswerGenerationResult> = {};
+  const failedQuestions: { id: string; text: string; error: string }[] = [];
+
+  let cachedCount = 0;
+  let generatedCount = 0;
+  let duplicatesMerged = 0;
+
+  // 1. Group duplicates within the batch so we don't generate the same question twice
+  const canonicalMap = new Map<string, string>(); // duplicateId -> canonicalId
+  const uniqueQuestionsToProcess: { id: string; text: string; marks: number; unit?: string; topic?: string }[] = [];
+
+  for (const q of questions) {
+    const match = uniqueQuestionsToProcess.find(u => areQuestionsSimilar(u.text, q.text));
+    if (match) {
+      canonicalMap.set(q.id, match.id);
+      duplicatesMerged++;
+    } else {
+      uniqueQuestionsToProcess.push(q);
+    }
+  }
+
+  // 2. Check cache for unique questions
+  const needsGeneration: { id: string; text: string; marks: number; unit?: string; topic?: string }[] = [];
+  for (const q of uniqueQuestionsToProcess) {
+    const cached = answerCache.get(subject, q.text, mode);
+    if (cached) {
+      answers[q.id] = {
+        answer: cached.answer,
+        shortAnswer: cached.shortAnswer,
+        answerSections: cached.answerSections,
+        marksDistribution: cached.marksDistribution,
+        isFromCache: true
+      };
+      cachedCount++;
+    } else {
+      needsGeneration.push(q);
+    }
+  }
+
+  // 3. Create parallel tasks with controlled concurrency for remaining questions
+  const tasks = needsGeneration.map(q => async () => {
+    const result = await generateFullAnswer(q.text, q.marks, subject, {
+      unit: q.unit,
+      topic: q.topic,
+      mode
+    });
+    return { id: q.id, ...result };
+  });
+
+  const concurrencyResult = await runWithControlledConcurrency(
+    tasks,
+    concurrencyLimit,
+    (completed, taskTotal, progressItem) => {
+      if (onProgress) {
+        onProgress(cachedCount + completed, total, progressItem);
+      }
+    }
+  );
+
+  for (const succ of concurrencyResult.successful) {
+    answers[succ.data.id] = succ.data;
+    generatedCount++;
+  }
+
+  for (const fail of concurrencyResult.failed) {
+    const failedQ = needsGeneration[fail.index];
+    failedQuestions.push({
+      id: failedQ.id,
+      text: failedQ.text,
+      error: fail.error
+    });
+  }
+
+  // 4. Propagate answers to all duplicate questions that were mapped to canonical ones
+  for (const [dupId, canonId] of canonicalMap.entries()) {
+    if (answers[canonId]) {
+      answers[dupId] = {
+        ...answers[canonId],
+        isFromCache: true
+      };
+    }
+  }
+
+  const durationMs = Date.now() - startTime;
+
+  return {
+    answers,
+    stats: {
+      total,
+      cachedCount,
+      generatedCount,
+      duplicatesMerged,
+      failedCount: failedQuestions.length,
+      durationMs
+    },
+    failedQuestions
+  };
 }
 
 export async function chatWithAI(
@@ -427,9 +613,8 @@ export async function chatWithAI(
   userMessage: string, 
   history: { role: "user" | "model"; parts: { text: string }[] }[]
 ): Promise<string> {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-  const model = ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+  const response = await generateContentWithRetry({
+    preferredModel: "gemini-3.8-flash",
     contents: [
       {
         role: "user",
@@ -487,14 +672,12 @@ export async function chatWithAI(
     }
   });
 
-  const response = await model;
   return response.text || "I'm sorry, I couldn't process that request.";
 }
 
 export async function generateStudyStrategy(result: AnalysisResult, timeframe: string = "general"): Promise<string> {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-  const model = ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+  const response = await generateContentWithRetry({
+    preferredModel: "gemini-3.8-flash",
     contents: [
       {
         role: "user",
@@ -529,6 +712,5 @@ export async function generateStudyStrategy(result: AnalysisResult, timeframe: s
     ]
   });
 
-  const response = await model;
   return response.text || "Failed to generate study strategy.";
 }

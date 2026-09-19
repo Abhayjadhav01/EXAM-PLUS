@@ -36,8 +36,20 @@ import { cn } from './utils/cn';
 import { AnalysisDashboard } from './components/AnalysisDashboard';
 import { jsPDF } from 'jspdf';
 import { AnswerRenderer } from './components/AnswerRenderer';
-import { UploadedFile, AnalysisResult, Question, RawQuestion } from './types';
-import { analyzePapers, simplifyAnswer, generateShortAnswer, chatWithAI, generateStudyStrategy, generateFullAnswer } from './services/geminiService';
+import { UploadedFile, AnalysisResult, Question, RawQuestion, FeedbackType } from './types';
+import { FeedbackModal } from './components/FeedbackModal';
+import { FeedbackAdminModal } from './components/FeedbackAdminModal';
+import { 
+  analyzePapers, 
+  simplifyAnswer, 
+  generateShortAnswer, 
+  chatWithAI, 
+  generateStudyStrategy, 
+  generateFullAnswer, 
+  batchGenerateAnswers, 
+  getCacheStats 
+} from './services/geminiService';
+import { areQuestionsSimilar } from './services/ai/normalizer';
 import { auth, signInWithGoogle, logout } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { useFirestore } from './hooks/useFirestore';
@@ -53,6 +65,11 @@ export default function App() {
   const [history, setHistory] = useState<(AnalysisResult & { id: string })[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Feedback & Bug Reporting State
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [feedbackInitialType, setFeedbackInitialType] = useState<FeedbackType>('bug');
+  const [isFeedbackAdminOpen, setIsFeedbackAdminOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
 
   useEffect(() => {
@@ -93,6 +110,10 @@ export default function App() {
   const [studyStrategy, setStudyStrategy] = useState<string | null>(null);
   const [isGeneratingStrategy, setIsGeneratingStrategy] = useState(false);
   const [isGeneratingAnswer, setIsGeneratingAnswer] = useState(false);
+  const [selectedMode, setSelectedMode] = useState<'short' | 'medium' | 'detailed'>('detailed');
+  const [analysisStep, setAnalysisStep] = useState<string>("");
+  const [cacheStats, setCacheStats] = useState<{ totalLookups: number; cacheHits: number; apiCallsSaved: number } | null>(null);
+  const [answerError, setAnswerError] = useState<string | null>(null);
   const [isGeneratingHandbook, setIsGeneratingHandbook] = useState(false);
   const [handbookProgress, setHandbookProgress] = useState<string>("");
   const [handbookTotal, setHandbookTotal] = useState<number>(0);
@@ -121,50 +142,72 @@ export default function App() {
     }
   }, [selectedQuestion]);
 
+  const loadAnswerForQuestion = useCallback(async (
+    q: Question | RawQuestion,
+    modeOverride?: 'short' | 'medium' | 'detailed'
+  ) => {
+    if (!result || isGeneratingAnswer) return;
+    const mode = modeOverride || selectedMode;
+    setIsGeneratingAnswer(true);
+    setAnswerError(null);
+    try {
+      const fullData = await generateFullAnswer(
+        q.text,
+        q.marks,
+        result.subject,
+        {
+          mode,
+          unit: ('unit' in q ? q.unit : undefined),
+          topic: ('topic' in q ? q.topic : undefined)
+        }
+      );
+      
+      // Update the question in the result state, AND propagate to duplicate/rephrased questions
+      setResult(prev => {
+        if (!prev) return prev;
+        const qId = 'id' in q ? (q as any).id : undefined;
+        const updateQuestion = (item: any) => {
+          const isDirectMatch = item.text === q.text;
+          const isLinked = (qId && item.linkedQuestionIds?.includes(qId)) || 
+                           (item.id && (q as any).linkedQuestionIds?.includes(item.id));
+          const isSimilar = areQuestionsSimilar(item.text, q.text);
+
+          if (isDirectMatch || isLinked || isSimilar) {
+            return { ...item, ...fullData };
+          }
+          return item;
+        };
+        
+        return {
+          ...prev,
+          questions: prev.questions.map(updateQuestion),
+          rawQuestions: prev.rawQuestions.map(updateQuestion)
+        };
+      });
+
+      // Update selected question locally
+      setSelectedQuestion(prev => (prev && (prev.text === q.text || areQuestionsSimilar(prev.text, q.text))) ? { ...prev, ...fullData } : prev);
+
+      // Refresh cache metrics
+      getCacheStats().then(s => s && setCacheStats(s.metrics)).catch(() => {});
+    } catch (err: any) {
+      console.error("Failed to generate answer", err);
+      setAnswerError(err.message || "Failed to generate answer. Please try again.");
+    } finally {
+      setIsGeneratingAnswer(false);
+    }
+  }, [result, isGeneratingAnswer, selectedMode]);
+
   useEffect(() => {
     if (selectedQuestion) {
       scrollToBottom();
-      
+      setAnswerError(null);
       // Lazy load answer if missing
-      if (!selectedQuestion.answer && result) {
-        const loadAnswer = async () => {
-          setIsGeneratingAnswer(true);
-          try {
-            const fullData = await generateFullAnswer(
-              selectedQuestion.text,
-              selectedQuestion.marks,
-              result.subject
-            );
-            
-            // Update the question in the result state so it's cached
-            setResult(prev => {
-              if (!prev) return prev;
-              const updateQuestion = (q: any) => {
-                if (q.text === selectedQuestion.text) {
-                  return { ...q, ...fullData };
-                }
-                return q;
-              };
-              
-              return {
-                ...prev,
-                questions: prev.questions.map(updateQuestion),
-                rawQuestions: prev.rawQuestions.map(updateQuestion)
-              };
-            });
-
-            // Update selected question locally
-            setSelectedQuestion(prev => prev ? { ...prev, ...fullData } : null);
-          } catch (err) {
-            console.error("Failed to generate answer", err);
-          } finally {
-            setIsGeneratingAnswer(false);
-          }
-        };
-        loadAnswer();
+      if (!selectedQuestion.answer && result && !isGeneratingAnswer) {
+        loadAnswerForQuestion(selectedQuestion);
       }
     }
-  }, [chatMessages, selectedQuestion, result]);
+  }, [selectedQuestion?.text, selectedQuestion?.answer, result?.subject, loadAnswerForQuestion]);
 
   // Keep studyStrategy state in sync with loaded result (including history loads)
   useEffect(() => {
@@ -1228,33 +1271,56 @@ export default function App() {
       setHandbookTotal(selectedQuestionsToAnswer.length);
       setHandbookCurrent(0);
 
-      // 2. FETCH OR GENERATE HIGH-QUALITY TOPPER ANSWERS SEQUENTIALLY
-      const answeredQuestions: Question[] = [];
-      for (let i = 0; i < selectedQuestionsToAnswer.length; i++) {
-        const q = selectedQuestionsToAnswer[i];
-        setHandbookCurrent(i + 1);
-        setHandbookProgress(`Drafting premium visual notes for: "${q.text.slice(0, 45)}..."`);
+      // 2. FETCH OR GENERATE HIGH-QUALITY TOPPER ANSWERS IN OPTIMIZED PARALLEL BATCH
+      setHandbookProgress("Checking fast cache & identifying duplicate concepts across units...");
+      
+      const needsGenerationList = selectedQuestionsToAnswer.filter(q => {
+        const cached = result.questions.find(item => item.id === q.id || item.text === q.text);
+        return !(cached && cached.answer && cached.answerSections);
+      });
 
-        const cachedQ = result.questions.find(item => item.id === q.id);
-        if (cachedQ && cachedQ.answer && cachedQ.answerSections) {
-          answeredQuestions.push(cachedQ);
-          continue;
-        }
+      if (needsGenerationList.length > 0) {
+        setHandbookProgress(`Generating ${needsGenerationList.length} university model answers in parallel...`);
+        
+        const batchResponse = await batchGenerateAnswers(
+          needsGenerationList.map(q => ({
+            id: q.id,
+            text: q.text,
+            marks: q.marks,
+            unit: q.unit,
+            topic: q.topic
+          })),
+          result.subject,
+          'detailed',
+          3
+        );
 
-        const fullData = await generateFullAnswer(q.text, q.marks, result.subject);
-        const updatedQ = { ...q, ...fullData };
-        answeredQuestions.push(updatedQ);
-
+        // Update result state with all generated and deduplicated answers
         setResult(prev => {
           if (!prev) return prev;
           return {
             ...prev,
-            questions: prev.questions.map(item => item.id === q.id ? updatedQ : item)
+            questions: prev.questions.map(q => {
+              if (batchResponse.answers[q.id]) {
+                return { ...q, ...batchResponse.answers[q.id] };
+              }
+              return q;
+            })
           };
         });
+
+        // Refresh cache metrics
+        getCacheStats().then(s => s && setCacheStats(s.metrics)).catch(() => {});
       }
 
+      setHandbookCurrent(selectedQuestionsToAnswer.length);
       setHandbookProgress("Assembling book layout and rendering Premium PDF...");
+
+      // Fetch the updated answered questions from state/cache
+      const answeredQuestions = selectedQuestionsToAnswer.map(q => {
+        const found = result.questions.find(item => item.id === q.id || item.text === q.text);
+        return found?.answer ? found : q;
+      });
 
       // 3. COMPILE COMPLETE HANDBOOK PDF USING jspdf
       const doc = new jsPDF();
@@ -1674,6 +1740,19 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {/* Quick Feedback link in Navbar */}
+            <button
+              onClick={() => {
+                setFeedbackInitialType('bug');
+                setIsFeedbackOpen(true);
+              }}
+              title="Report an issue or give feedback"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider text-slate-300 hover:text-white hover:bg-white/10 transition-all select-none border border-white/5 cursor-pointer"
+            >
+              <MessageSquare size={13} className="text-emerald-400" />
+              <span className="hidden sm:inline">Feedback</span>
+            </button>
+
             {result && (
               <button 
                 onClick={reset}
@@ -2102,6 +2181,12 @@ export default function App() {
                     Repeated {selectedQuestion.repetitionCount}x
                   </span>
                 )}
+                {selectedQuestion.answer && (
+                  <span className="px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200/80 rounded-full text-xs font-bold flex items-center gap-1.5">
+                    <Sparkles size={12} className="text-emerald-600" />
+                    Verified Model Answer
+                  </span>
+                )}
               </div>
               <h3 className="text-4xl font-bold leading-tight text-slate-900">
                 {selectedQuestion.text}
@@ -2112,44 +2197,96 @@ export default function App() {
               {/* Main Answer Content */}
               <div className="lg:col-span-2 space-y-8">
                 <div className="space-y-6">
-                  {/* Action Buttons */}
-                  <div className="flex items-center justify-end gap-2 px-4">
-                    <button
-                      onClick={handleShort}
-                      disabled={isGeneratingShort || isGeneratingAnswer}
-                      className={cn(
-                        "flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-bold transition-all",
-                        showShort 
-                          ? "bg-emerald-600 text-white shadow-lg shadow-emerald-200" 
-                          : "bg-white border border-black/5 text-emerald-700 hover:bg-emerald-50",
-                        (isGeneratingShort || isGeneratingAnswer) && "opacity-50 cursor-not-allowed"
-                      )}
-                    >
-                      {isGeneratingShort ? (
-                        <RefreshCw size={14} className="animate-spin" />
-                      ) : (
-                        <List size={14} />
-                      )}
-                      {isGeneratingShort ? 'Generating...' : showShort ? 'Show Original' : 'Short Answer'}
-                    </button>
-                    <button
-                      onClick={handleSimplify}
-                      disabled={isSimplifying || isGeneratingAnswer}
-                      className={cn(
-                        "flex items-center gap-2 px-5 py-2.5 rounded-2xl text-xs font-bold transition-all",
-                        showSimplified 
-                          ? "bg-emerald-600 text-white shadow-lg shadow-emerald-200" 
-                          : "bg-white border border-black/5 text-emerald-700 hover:bg-emerald-50",
-                        (isSimplifying || isGeneratingAnswer) && "opacity-50 cursor-not-allowed"
-                      )}
-                    >
-                      {isSimplifying ? (
-                        <RefreshCw size={14} className="animate-spin" />
-                      ) : (
-                        <Sparkles size={14} />
-                      )}
-                      {isSimplifying ? 'Simplifying...' : showSimplified ? 'Show Original' : 'Simplify Language'}
-                    </button>
+                  {/* Action Buttons & Answer Length Mode Switcher */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 px-4">
+                    {/* Mode selector */}
+                    <div className="inline-flex items-center gap-1 p-1 bg-slate-100/80 rounded-2xl border border-slate-200/60 shadow-xs">
+                      <button
+                        onClick={() => {
+                          setSelectedMode('short');
+                          if (selectedQuestion) loadAnswerForQuestion(selectedQuestion, 'short');
+                        }}
+                        disabled={isGeneratingAnswer}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer",
+                          selectedMode === 'short'
+                            ? "bg-white text-emerald-800 shadow-xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        )}
+                      >
+                        ⚡ Crisp (2-5M)
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedMode('medium');
+                          if (selectedQuestion) loadAnswerForQuestion(selectedQuestion, 'medium');
+                        }}
+                        disabled={isGeneratingAnswer}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer",
+                          selectedMode === 'medium'
+                            ? "bg-white text-emerald-800 shadow-xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        )}
+                      >
+                        📖 Standard (5-8M)
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedMode('detailed');
+                          if (selectedQuestion) loadAnswerForQuestion(selectedQuestion, 'detailed');
+                        }}
+                        disabled={isGeneratingAnswer}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer",
+                          selectedMode === 'detailed'
+                            ? "bg-white text-emerald-800 shadow-xs"
+                            : "text-slate-600 hover:text-slate-900"
+                        )}
+                      >
+                        🏆 Topper (10+M)
+                      </button>
+                    </div>
+
+                    {/* Secondary Transformations */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleShort}
+                        disabled={isGeneratingShort || isGeneratingAnswer}
+                        className={cn(
+                          "flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition-all cursor-pointer",
+                          showShort 
+                            ? "bg-emerald-600 text-white shadow-lg shadow-emerald-200" 
+                            : "bg-white border border-slate-200/80 text-emerald-700 hover:bg-emerald-50",
+                          (isGeneratingShort || isGeneratingAnswer) && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
+                        {isGeneratingShort ? (
+                          <RefreshCw size={14} className="animate-spin" />
+                        ) : (
+                          <List size={14} />
+                        )}
+                        {isGeneratingShort ? 'Generating...' : showShort ? 'Show Full' : 'Summary'}
+                      </button>
+                      <button
+                        onClick={handleSimplify}
+                        disabled={isSimplifying || isGeneratingAnswer}
+                        className={cn(
+                          "flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition-all cursor-pointer",
+                          showSimplified 
+                            ? "bg-emerald-600 text-white shadow-lg shadow-emerald-200" 
+                            : "bg-white border border-slate-200/80 text-emerald-700 hover:bg-emerald-50",
+                          (isSimplifying || isGeneratingAnswer) && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
+                        {isSimplifying ? (
+                          <RefreshCw size={14} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={14} />
+                        )}
+                        {isSimplifying ? 'Simplifying...' : showSimplified ? 'Show Original' : 'Simplify'}
+                      </button>
+                    </div>
                   </div>
 
                   {/* Single-Page Structured Answer */}
@@ -2159,10 +2296,39 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="bg-white rounded-[40px] p-10 border border-black/5 shadow-sm space-y-8">
-                      <AnswerRenderer 
-                        answer={selectedQuestion.answer || ''} 
-                        sections={selectedQuestion.answerSections} 
-                      />
+                      {isGeneratingAnswer ? (
+                        <div className="py-16 text-center space-y-4">
+                          <div className="w-10 h-10 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto" />
+                          <div>
+                            <h4 className="text-base font-bold text-slate-800">Generating University Model Answer</h4>
+                            <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                              Exam Plus AI is crafting structured topper notes with marks rubrics and diagrams...
+                            </p>
+                          </div>
+                        </div>
+                      ) : answerError ? (
+                        <div className="py-12 px-6 text-center bg-rose-50/60 border border-rose-100 rounded-3xl space-y-4">
+                          <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+                            <AlertCircle size={22} />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-rose-900">Failed to Generate Model Answer</h4>
+                            <p className="text-xs text-rose-600 mt-1 max-w-md mx-auto">{answerError}</p>
+                          </div>
+                          <button
+                            onClick={() => selectedQuestion && loadAnswerForQuestion(selectedQuestion)}
+                            className="inline-flex items-center gap-2 px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold transition-all shadow-sm"
+                          >
+                            <RefreshCw size={14} />
+                            Retry Answer Generation
+                          </button>
+                        </div>
+                      ) : (
+                        <AnswerRenderer 
+                          answer={selectedQuestion.answer || ''} 
+                          sections={selectedQuestion.answerSections} 
+                        />
+                      )}
 
                       {/* Linked Questions Section */}
                       {selectedQuestion.linkedQuestionIds && selectedQuestion.linkedQuestionIds.length > 0 && (
@@ -2755,22 +2921,60 @@ export default function App() {
             </div>
 
             <div className="space-y-3">
-              <h4 className="text-[10px] font-black uppercase tracking-widest text-white font-heading">Target Subjects</h4>
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-white font-heading">Need Help or Found an Issue?</h4>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Works for any semester exams, board prep, professional certifications, or coursework files where past exam sheets are available.
+                Notice an incorrect answer, PDF extraction glitch, or want to suggest a feature?
               </p>
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFeedbackInitialType('bug');
+                    setIsFeedbackOpen(true);
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-950/40 cursor-pointer"
+                >
+                  <MessageSquare size={14} />
+                  <span>💬 Give Feedback</span>
+                </button>
+              </div>
             </div>
           </div>
 
           <div className="pt-8 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 text-center sm:text-left">
               <p className="text-[11px] font-medium text-slate-500">
-                &copy; 2026 Exam Plus. All rights reserved.
+                &copy; 2026 PYQ Analyzer.
               </p>
               <span className="hidden sm:inline text-slate-700">|</span>
-              <p className="text-[11px] font-medium text-slate-500">
-                Helping students code their success path.
-              </p>
+              <div className="flex items-center justify-center gap-3 text-[11px] text-slate-400">
+                <button
+                  onClick={() => {
+                    setFeedbackInitialType('general');
+                    setIsFeedbackOpen(true);
+                  }}
+                  className="hover:text-emerald-400 transition-colors cursor-pointer"
+                >
+                  Feedback
+                </button>
+                <span className="text-slate-700">•</span>
+                <button
+                  onClick={() => {
+                    setFeedbackInitialType('bug');
+                    setIsFeedbackOpen(true);
+                  }}
+                  className="hover:text-rose-400 text-rose-300/80 transition-colors cursor-pointer"
+                >
+                  Report a Bug
+                </button>
+                <span className="text-slate-700">•</span>
+                <button
+                  onClick={() => setIsFeedbackAdminOpen(true)}
+                  className="hover:text-emerald-400 text-slate-400 transition-colors cursor-pointer"
+                >
+                  Feedback Admin Desk
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-400 bg-white/5 px-3 py-1 rounded-xl uppercase tracking-wider select-none border border-white/5">
               <span>Built by</span>
@@ -2830,6 +3034,31 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* User Feedback & Bug Reporting Modal */}
+      <FeedbackModal
+        isOpen={isFeedbackOpen}
+        onClose={() => setIsFeedbackOpen(false)}
+        initialType={feedbackInitialType}
+        currentPageContext={
+          result
+            ? `Subject: ${result.subject} (Analyzed ${result.uploadedPapers?.length || 0} papers, ${result.questions.length} questions)`
+            : files.length > 0
+            ? `Upload Stage (${files.length} papers selected)`
+            : 'Home / Upload Page'
+        }
+        onOpenAdmin={() => setIsFeedbackAdminOpen(true)}
+      />
+
+      {/* Admin / Developer Feedback Triage Desk */}
+      <FeedbackAdminModal
+        isOpen={isFeedbackAdminOpen}
+        onClose={() => setIsFeedbackAdminOpen(false)}
+        onOpenNewFeedback={() => {
+          setFeedbackInitialType('bug');
+          setIsFeedbackOpen(true);
+        }}
+      />
     </div>
   );
 }

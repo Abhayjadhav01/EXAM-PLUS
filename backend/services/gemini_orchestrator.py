@@ -74,7 +74,7 @@ Return the result strictly as a valid JSON object matching this schema:
     parts.append(prompt)
     
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=parts,
         config=types.GenerateContentConfig(
             temperature=0.2,
@@ -112,7 +112,7 @@ Return result as JSON:
 """
     
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
             temperature=0.3,
@@ -129,7 +129,7 @@ async def run_study_chat(question_text: str, answer_text: str, user_message: str
     prompt = f"Study Assistant Context:\n{context}\n\nStudent Query: {user_message}\n\nProvide a clear, direct, and encouraging explanation."
     
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=prompt,
         config=types.GenerateContentConfig(temperature=0.4)
     )
@@ -150,7 +150,7 @@ Requirements:
 Format with clean bullet points and vertical structure."""
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=prompt,
         config=types.GenerateContentConfig(temperature=0.3)
     )
@@ -165,7 +165,7 @@ MARKS: {marks}
 Keep bullet points under 2 lines. Use structured sections: 📘 Definition, 📍 Key Points, 🛡 Advantages, ⚡ Quick Revision."""
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=prompt,
         config=types.GenerateContentConfig(temperature=0.3)
     )
@@ -179,7 +179,7 @@ MODEL ANSWER: {answer_text}
 Structure: 📘 Core Definition (2 bullets) and ⚡ Rapid Review Points (3 bullets). Maximum 5 bullets total."""
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=prompt,
         config=types.GenerateContentConfig(temperature=0.3)
     )
