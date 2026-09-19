@@ -3,6 +3,7 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import aiRoutes from './server/routes/aiRoutes';
+import feedbackRoutes from './server/routes/feedbackRoutes';
 
 dotenv.config();
 
@@ -23,6 +24,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.use('/api/ai', aiRoutes);
+app.use('/api/feedback', feedbackRoutes);
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {

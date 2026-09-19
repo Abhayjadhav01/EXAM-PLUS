@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { 
   analyzePapers, 
   generateFullAnswer, 
+  batchGenerateAnswers,
   chatWithAI, 
   generateStudyStrategy 
 } from '../../src/services/ai/orchestrator';
@@ -9,6 +10,7 @@ import {
   simplifyAnswer, 
   generateShortAnswer 
 } from '../../src/services/ai/generator';
+import { answerCache } from '../../src/services/ai/cache';
 
 export async function handleAnalyzePapers(req: Request, res: Response) {
   try {
@@ -29,11 +31,15 @@ export async function handleAnalyzePapers(req: Request, res: Response) {
 
 export async function handleGenerateAnswer(req: Request, res: Response) {
   try {
-    const { questionText, marks, subject } = req.body;
+    const { questionText, marks, subject, mode, unit, topic } = req.body;
     if (!questionText || !marks || !subject) {
       return res.status(400).json({ error: 'questionText, marks, and subject are required.' });
     }
-    const answerData = await generateFullAnswer(questionText, Number(marks), subject);
+    const answerData = await generateFullAnswer(questionText, Number(marks), subject, {
+      mode: mode || (Number(marks) <= 4 ? 'short' : Number(marks) <= 8 ? 'medium' : 'detailed'),
+      unit,
+      topic
+    });
     return res.json(answerData);
   } catch (error: any) {
     console.error('Error in handleGenerateAnswer:', error);
@@ -41,6 +47,38 @@ export async function handleGenerateAnswer(req: Request, res: Response) {
       error: 'Failed to generate model answer.', 
       details: error.message || String(error) 
     });
+  }
+}
+
+export async function handleBatchGenerateAnswers(req: Request, res: Response) {
+  try {
+    const { questions, subject, mode, concurrencyLimit } = req.body;
+    if (!questions || !Array.isArray(questions) || questions.length === 0 || !subject) {
+      return res.status(400).json({ error: 'questions array and subject are required.' });
+    }
+    const result = await batchGenerateAnswers(
+      questions,
+      subject,
+      mode || 'detailed',
+      concurrencyLimit ? Number(concurrencyLimit) : 3
+    );
+    return res.json(result);
+  } catch (error: any) {
+    console.error('Error in handleBatchGenerateAnswers:', error);
+    return res.status(500).json({ 
+      error: 'Failed to batch generate answers.', 
+      details: error.message || String(error) 
+    });
+  }
+}
+
+export async function handleGetCacheStats(req: Request, res: Response) {
+  try {
+    return res.json({
+      metrics: answerCache.getMetrics()
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Failed to retrieve cache stats' });
   }
 }
 

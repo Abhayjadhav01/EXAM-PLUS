@@ -75,3 +75,65 @@ export interface UploadedFile {
   preview: string;
   id: string;
 }
+
+export type FeedbackType = 'general' | 'bug' | 'feature' | 'other';
+export type FeedbackStatus = 'New' | 'Under Review' | 'In Progress' | 'Fixed' | 'Closed';
+
+export interface FeedbackAttachment {
+  name: string;
+  size: number;
+  type: string;
+  dataUrl?: string;
+  url?: string;
+}
+
+export interface TechnicalContext {
+  browser: string;
+  os: string;
+  screenResolution: string;
+  appVersion: string;
+  currentPage: string;
+  timestamp: string;
+}
+
+export interface FeedbackReport {
+  id: string;
+  feedbackType: FeedbackType;
+  name?: string;
+  email?: string;
+  subject: string;
+  description: string;
+  whatHappened?: string;
+  expectedBehavior?: string;
+  stepsToReproduce?: string[];
+  attachments: {
+    name: string;
+    size: number;
+    type: string;
+    url: string;
+  }[];
+  technicalContext: TechnicalContext;
+  status: FeedbackStatus;
+  createdAt: string;
+  updatedAt: string;
+  internalNotes?: string;
+  similarReportIds?: string[];
+}
+
+export interface FeedbackFormInput {
+  feedbackType: FeedbackType;
+  name?: string;
+  email?: string;
+  subject: string;
+  description: string;
+  whatHappened?: string;
+  expectedBehavior?: string;
+  stepsToReproduce?: string[];
+  attachments: {
+    name: string;
+    size: number;
+    type: string;
+    dataUrl: string;
+  }[];
+  technicalContext: TechnicalContext;
+}
