@@ -1,25 +1,7 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { 
-  BookOpen, 
-  HelpCircle, 
-  Brain, 
-  Sparkles, 
-  Target, 
-  Compass, 
-  ShieldAlert,
-  Activity,
-  Terminal,
-  Trophy,
-  CheckCircle2,
-  FileText
-} from 'lucide-react';
-
-interface AnswerSection {
-  title: string;
-  content: string;
-  type: 'text' | 'diagram' | 'example' | 'table' | 'summary';
-}
+import { Trophy, CheckCircle2 } from 'lucide-react';
+import { AnswerSection } from '../types';
 
 interface AnswerRendererProps {
   answer: string;

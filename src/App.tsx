@@ -23,74 +23,24 @@ import {
   RefreshCw,
   MessageSquare,
   Send,
-  Lightbulb,
   Target,
-  Download,
   List,
-  School,
   GraduationCap,
   ShieldCheck,
-  AlertTriangle,
-  Flame,
   TrendingUp,
-  CheckSquare,
   Plus,
   LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { cn } from './utils/cn';
 import { AnalysisDashboard } from './components/AnalysisDashboard';
 import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { AnswerRenderer } from './components/AnswerRenderer';
-import { UploadedFile, AnalysisResult, Question, RawQuestion, AnswerSection } from './types';
+import { UploadedFile, AnalysisResult, Question, RawQuestion } from './types';
 import { analyzePapers, simplifyAnswer, generateShortAnswer, chatWithAI, generateStudyStrategy, generateFullAnswer } from './services/geminiService';
 import { auth, signInWithGoogle, logout } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { useFirestore } from './hooks/useFirestore';
-
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
-
-function Accordion({ title, children, defaultOpen = false, icon: Icon }: { title: string; children: React.ReactNode; defaultOpen?: boolean; icon?: React.ReactNode }) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-  return (
-    <div className="border border-black/5 rounded-[32px] overflow-hidden bg-white shadow-sm transition-all hover:shadow-md">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-8 py-6 flex items-center justify-between text-left hover:bg-black/[0.02] transition-colors"
-      >
-        <div className="flex items-center gap-4">
-          {Icon && <div className="text-emerald-600">{Icon}</div>}
-          <span className="text-lg font-bold text-slate-800">{title}</span>
-        </div>
-        <motion.div
-          animate={{ rotate: isOpen ? 180 : 0 }}
-          transition={{ type: "spring", stiffness: 300, damping: 20 }}
-          className="text-black/20"
-        >
-          <ChevronRight size={24} />
-        </motion.div>
-      </button>
-      <AnimatePresence initial={false}>
-        {isOpen && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ type: "spring", stiffness: 300, damping: 30 }}
-          >
-            <div className="px-8 pb-8 pt-2">
-              {children}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -99,7 +49,6 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [zoomedDiagram, setZoomedDiagram] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [history, setHistory] = useState<(AnalysisResult & { id: string })[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -1791,43 +1740,6 @@ export default function App() {
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-12">
-        {/* Diagram Zoom Modal */}
-        <AnimatePresence>
-          {zoomedDiagram && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-xl flex items-center justify-center p-4 lg:p-12"
-              onClick={() => setZoomedDiagram(null)}
-            >
-              <motion.div
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.9, opacity: 0 }}
-                className="bg-white rounded-[40px] p-8 lg:p-12 w-full max-w-6xl max-h-[90vh] overflow-auto relative shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <button 
-                  onClick={() => setZoomedDiagram(null)}
-                  className="absolute top-6 right-6 w-12 h-12 bg-black/5 hover:bg-black/10 rounded-2xl flex items-center justify-center transition-all"
-                >
-                  <X size={24} />
-                </button>
-                <div className="mb-8">
-                  <h3 className="text-2xl font-bold text-slate-900">Diagram View</h3>
-                  <p className="text-slate-500 font-medium">Detailed visual representation of the concept</p>
-                </div>
-                <div className="flex items-center justify-center min-h-[400px] bg-slate-50 rounded-[32px] p-8 overflow-auto border border-black/5">
-                  <pre className="font-mono text-sm leading-relaxed text-slate-800">
-                    {zoomedDiagram}
-                  </pre>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
         {/* Analysis Loading Overlay with Ads Placeholder */}
         <AnimatePresence>
           {isAnalyzing && (

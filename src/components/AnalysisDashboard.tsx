@@ -20,13 +20,8 @@ import {
   Loader2
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
 import { Question, AnalysisResult } from '../types';
-
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
+import { cn } from '../utils/cn';
 
 interface AnalysisDashboardProps {
   result: AnalysisResult;

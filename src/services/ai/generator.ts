@@ -2,10 +2,6 @@ import { GoogleGenAI } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-export async function generateAnswer(question: string, marks: number) {
-  // Logic for generating a single master answer
-}
-
 export async function simplifyAnswer(question: string, answer: string, marks: number): Promise<string> {
   const model = ai.models.generateContent({
     model: "gemini-3.1-pro-preview",
